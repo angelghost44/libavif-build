@@ -67,8 +67,10 @@ jobs:
           echo 正在打包构建产物...
           mkdir qt_msvc_package
           
-          # 关键：使用双反斜杠 \\ 避免转义问题
-          xcopy /E /I build\\Release qt_msvc_package\\bin\\
+          # 核心：直接复制整个 build 目录（无论什么结构都包含）
+          xcopy /E /I build qt_msvc_package\\build\\
+          
+          # 复制头文件
           xcopy /E /I include qt_msvc_package\\include\\
           
           # 创建压缩包
