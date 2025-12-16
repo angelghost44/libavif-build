@@ -1,95 +1,93 @@
-# Do a shared library build with local dependencies.
-
-name: CI Windows Shared Local
+# Do a shared library build with local dependencies (MSVC Only).
+name: Build MSVC DLL for Qt
 on:
-  push:
-  pull_request:
-    paths:
-      - ".github/actions/**"
-      - ".github/workflows/ci-windows-shared-local.yml"
-      - "**CMakeLists.txt"
-      - "cmake/**"
-      - "ext/**"
-  # !!! 【新增】允许手动触发，用于云端一键构建
+  # 允许手动触发，实现云端一键构建
   workflow_dispatch:
+  # 可选：推送到主分支时也触发（您可按需删除）
+  push:
+    branches: [ main, master ]
 
-# !!! 【修改】必须有写入权限才能创建Release
+# 必须有写入权限才能创建Release
 permissions:
   contents: write
 
-# Cancel the workflow if a new one is triggered from the same PR, branch, or tag, except on main.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
 jobs:
-  build-windows-shared-local:
+  build-msvc-dll:
     runs-on: windows-latest
+    # 关键：只使用MSVC编译器，移除clang-cl矩阵
     strategy:
-      fail-fast: false
       matrix:
-        compiler: [msvc, clang-cl]
+        compiler: [msvc]  # 只保留msvc
 
     steps:
+      # 1. 检出代码
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      # 2. 使用原项目的环境设置
       - uses: ./.github/actions/setup-windows
         with:
           codec-aom: "LOCAL"
           codec-dav1d: "LOCAL"
           extra-cache-key: ${{ matrix.compiler }}
-      - name: Leave compiler as default
-        if: matrix.compiler == 'msvc'
-        run: |
-          echo "AVIF_CMAKE_C_COMPILER=" >> $env:GITHUB_ENV
-          echo "AVIF_CMAKE_CXX_COMPILER=" >> $env:GITHUB_ENV
-      - name: Set clang-cl as compiler
-        if: matrix.compiler == 'clang-cl'
-        run: |
-          echo "AVIF_CMAKE_C_COMPILER=-DCMAKE_C_COMPILER=clang-cl" >> $env:GITHUB_ENV
-          echo "AVIF_CMAKE_CXX_COMPILER=-DCMAKE_CXX_COMPILER=clang-cl" >> $env:GITHUB_ENV
 
-      - name: Prepare libavif (cmake)
+      # 3. 配置CMake (MSVC，动态库)
+      - name: Configure CMake for MSVC DLL
         run: >
           cmake -G Ninja -S . -B build
-          -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
-          -DAVIF_CODEC_AOM=LOCAL -DAVIF_CODEC_DAV1D=LOCAL
-          -DAVIF_JPEG=LOCAL -DAVIF_LIBSHARPYUV=LOCAL -DAVIF_LIBXML2=LOCAL
-          -DAVIF_LIBYUV=LOCAL -DAVIF_ZLIBPNG=LOCAL
-          -DAVIF_BUILD_EXAMPLES=ON -DAVIF_BUILD_APPS=ON
-          -DAVIF_BUILD_TESTS=ON -DAVIF_GTEST=LOCAL
-          -DAVIF_ENABLE_EXPERIMENTAL_MINI=ON
-          -DAVIF_ENABLE_EXPERIMENTAL_EXTENDED_PIXI=ON
-          -DAVIF_ENABLE_WERROR=ON $env:AVIF_CMAKE_C_COMPILER $env:AVIF_CMAKE_CXX_COMPILER
-      - name: Build libavif
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_SHARED_LIBS=ON
+          -DAVIF_CODEC_AOM=LOCAL
+          -DAVIF_CODEC_DAV1D=LOCAL
+          -DAVIF_JPEG=LOCAL
+          -DAVIF_LIBSHARPYUV=LOCAL
+          -DAVIF_LIBYUV=LOCAL
+          -DAVIF_ZLIBPNG=LOCAL
+          -DAVIF_BUILD_APPS=ON
+          -DAVIF_BUILD_TESTS=ON
+          -DAVIF_GTEST=LOCAL
+
+      # 4. 编译
+      - name: Build
         run: cmake --build build --config Release --parallel 4
-      - name: Run AVIF Tests
+
+      # 5. 运行测试（确保库的正确性）
+      - name: Run Tests
         working-directory: ./build
         run: ctest -j $Env:NUMBER_OF_PROCESSORS --output-on-failure
 
-      # ========== 【以下是唯一新增的两个步骤】 ==========
-      # 1. 打包MSVC版本的文件（和之前讨论的完全一致）
-      - name: Package MSVC Build for Release
-        if: matrix.compiler == 'msvc' && success()
+      # ========== 以下是打包和发布步骤 ==========
+      # 6. 打包完整的构建目录（修正版）
+      - name: Package Complete Build Output
+        if: success()
         shell: cmd
         run: |
-          mkdir release_package
-          copy build\Release\avif.dll release_package\
-          copy build\Release\avif.lib release_package\
-          xcopy /E /I include\avif release_package\avif\
-          7z a libavif-msvc-v1.zip .\release_package\*
+          echo "正在打包构建产物..."
+          mkdir qt_msvc_package
+          # 复制完整的构建输出目录（包含所有.dll, .lib, .exe等）
+          xcopy /E /I build\Release qt_msvc_package\bin\
+          # 复制完整的头文件目录树
+          xcopy /E /I include qt_msvc_package\include\
+          # 创建压缩包
+          7z a libavif-msvc-qt-package.zip .\qt_msvc_package\*
+          echo "=== 压缩包内容列表（供验证）==="
+          7z l libavif-msvc-qt-package.zip
 
-      # 2. 创建/覆盖名为“v1”的GitHub Release
-      - name: Create/Update v1 Release
-        if: matrix.compiler == 'msvc' && success()
+      # 7. 创建/覆盖 Release
+      - name: Create/Update Release for Qt
+        if: success()
         uses: softprops/action-gh-release@v1
         with:
+          # 固定标签和名称，每次覆盖更新
           tag_name: v1
-          name: v1 (Auto-built MSVC DLL)
+          name: "libavif MSVC DLL for Qt"
           body: |
-            自动化构建的 libavif MSVC 动态库。
-            此版本由工作流自动覆盖更新。
+            专为 Qt (MSVC) 构建的 libavif 动态库完整包。
+            包含：
+            - `bin/` 目录：avif.dll, avif.lib, 命令行工具
+            - `include/` 目录：所有必需的头文件
             构建时间：${{ github.event.head_commit.timestamp }}
-          files: libavif-msvc-v1.zip
-          replace: true
+            注意：此版本会被后续构建覆盖更新。
+          files: libavif-msvc-qt-package.zip
+          replace: true  # 覆盖旧的Release
           draft: false
           prerelease: false
