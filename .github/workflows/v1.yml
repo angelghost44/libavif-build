@@ -1,36 +1,39 @@
-# Do a shared library build with local dependencies (MSVC Only).
-name: Build MSVC DLL for Qt
+# 专为 Qt (MSVC) 构建 libavif 动态库并发布
+name: Build and Release MSVC DLL for Qt
+
 on:
-  # 允许手动触发，实现云端一键构建
+  # 手动触发，实现云端一键构建
   workflow_dispatch:
-  # 可选：推送到主分支时也触发（您可按需删除）
+  # 可选：推送到主分支时也触发（可按需删除）
   push:
     branches: [ main, master ]
 
-# 必须有写入权限才能创建Release
+# 必须有写入权限才能创建 Release
 permissions:
   contents: write
 
 jobs:
-  build-msvc-dll:
+  build-and-release:
     runs-on: windows-latest
-    # 关键：只使用MSVC编译器，移除clang-cl矩阵
+    # 只使用 MSVC 编译器，移除 clang-cl
     strategy:
       matrix:
-        compiler: [msvc]  # 只保留msvc
+        compiler: [msvc]
 
     steps:
       # 1. 检出代码
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       # 2. 使用原项目的环境设置
-      - uses: ./.github/actions/setup-windows
+      - name: Setup Windows Build Environment
+        uses: ./.github/actions/setup-windows
         with:
           codec-aom: "LOCAL"
           codec-dav1d: "LOCAL"
           extra-cache-key: ${{ matrix.compiler }}
 
-      # 3. 配置CMake (MSVC，动态库)
+      # 3. 配置 CMake (MSVC，动态库)
       - name: Configure CMake for MSVC DLL
         run: >
           cmake -G Ninja -S . -B build
@@ -55,22 +58,25 @@ jobs:
         working-directory: ./build
         run: ctest -j $Env:NUMBER_OF_PROCESSORS --output-on-failure
 
-      # ========== 以下是打包和发布步骤 ==========
-      # 6. 打包完整的构建目录（修正版）
+      # ========== 打包和发布步骤 ==========
+      # 6. 打包完整的构建目录（关键修正：使用双反斜杠避免转义）
       - name: Package Complete Build Output
         if: success()
         shell: cmd
         run: |
-          echo "正在打包构建产物..."
+          echo 正在打包构建产物...
           mkdir qt_msvc_package
-          # 复制完整的构建输出目录（包含所有.dll, .lib, .exe等）
-          xcopy /E /I build\Release qt_msvc_package\bin\
-          # 复制完整的头文件目录树
-          xcopy /E /I include qt_msvc_package\include\
+          
+          # 关键：使用双反斜杠 \\ 避免转义问题
+          xcopy /E /I build\\Release qt_msvc_package\\bin\\
+          xcopy /E /I include qt_msvc_package\\include\\
+          
           # 创建压缩包
-          7z a libavif-msvc-qt-package.zip .\qt_msvc_package\*
-          echo "=== 压缩包内容列表（供验证）==="
+          7z a libavif-msvc-qt-package.zip .\\qt_msvc_package\\*
+          
+          echo === 压缩包内容验证 ===
           7z l libavif-msvc-qt-package.zip
+          echo 打包完成。
 
       # 7. 创建/覆盖 Release
       - name: Create/Update Release for Qt
@@ -88,6 +94,6 @@ jobs:
             构建时间：${{ github.event.head_commit.timestamp }}
             注意：此版本会被后续构建覆盖更新。
           files: libavif-msvc-qt-package.zip
-          replace: true  # 覆盖旧的Release
+          replace: true  # 覆盖旧的 Release
           draft: false
           prerelease: false
